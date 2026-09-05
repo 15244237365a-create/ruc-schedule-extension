@@ -57,6 +57,8 @@
     label.set { display: flex; align-items: center; gap: 6px; margin-top: 10px; font-size: 12px; }
     label.set input { width: 90px; padding: 4px 6px; border: 1px solid #ddd; border-radius: 6px; font-size: 12px; }
     label.set select { padding: 4px; border: 1px solid #ddd; border-radius: 6px; font-size: 12px; }
+    .usage { margin-top: 12px; text-align: center; font-size: 11px; color: #a8a49e; }
+    .usage strong { color: #c47d00; }
     .more { margin-top: 14px; text-align: center; font-size: 12px; }
     .more a { color: #3d7899; }
   </style>
@@ -103,6 +105,7 @@
     <div style="margin-top:6px;">课表数据仅保存在你的浏览器本地（chrome.storage），读取成功后才上传到你配置的服务器生成可扫码的链接（本项目默认演示服务器 3 天后自动删除，自部署请自行配置）。ICS 不含姓名、学号，仅课程/时间/地点。</div>
   </details>
 
+  <div class="usage" id="usageLine" hidden></div>
   <div class="more"><a href="https://sch.agenttrust.site/" target="_blank">更多信息 →</a></div>
 
   <script src="ics.js"></script>

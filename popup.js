@@ -193,6 +193,16 @@ function makeQRDataURL(text) {
   if (schedule) {
     setStatus(`上次生成：${schedule.meta.calname}，${schedule.meta.eventCount} 节课（${new Date(schedule.meta.generatedAt).toLocaleString()}）`, 'ok');
   }
+  // 全校使用人数（聚合统计，无个人数据）
+  try {
+    const res = await fetch(SERVER + '/api/schedule/stats');
+    const s = await res.json();
+    if (s && s.ok && s.total > 0) {
+      const line = $('usageLine');
+      line.innerHTML = `同学们已生成 <strong>${Number(s.total).toLocaleString()}</strong> 份课表`;
+      line.hidden = false;
+    }
+  } catch (e) { /* 静默 */ }
   // ①：抓取 → 生成 → 自动上传并出二维码，一步到位
   $('btnExtract').addEventListener('click', async () => {
     const resp = await extract();

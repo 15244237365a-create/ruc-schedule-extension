@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""课表 ICS 上传/下载服务（自部署版）。
+"""人大课表 ICS 上传/下载服务（agenttrust.site，东京机）。
 
 POST /api/schedule/upload   body: {"ics": "...", "meta": {...}}，需带 X-Schedule-Token
-    -> {"ok": true, "icsUrl": "https://<你的域名>/api/schedule/<key>.ics"}
+    -> {"ok": true, "icsUrl": "https://agenttrust.site/api/schedule/<key>.ics"}
     文件名 = secrets.token_hex(8)（不可枚举），落盘 /var/www/schedule-ics/<key>.ics，
     由 Caddy 静态直出。
 
@@ -12,9 +12,9 @@ POST /api/schedule/upload   body: {"ics": "...", "meta": {...}}，需带 X-Sched
   - 清理线程每小时跑一次：只删 OUT_DIR 内 3 天以上的 *.ics（白名单目录+白名单后缀，
     不碰服务器上任何其他文件）
 """
+import datetime
 import json
 import os
-import re
 import secrets
 import threading
 import time
@@ -81,16 +81,69 @@ def count_files():
         return 0
 
 
+# ---- 使用统计（仅聚合：总量 + 按日次数，无任何个人数据）----
+STATS_FILE = os.path.join(OUT_DIR, 'stats.json')
+STATS_DAILY_KEEP = 30          # 每日桶保留 30 天
+_stats_lock = threading.Lock()
+
+
+def _load_stats():
+    try:
+        with open(STATS_FILE, encoding='utf-8') as f:
+            s = json.load(f)
+        if not isinstance(s, dict):
+            raise ValueError
+    except Exception:
+        s = {}
+    s.setdefault('total', 0)
+    s.setdefault('daily', {})
+    return s
+
+
+def record_upload():
+    today = datetime.date.today().isoformat()
+    with _stats_lock:
+        s = _load_stats()
+        s['total'] += 1
+        s['daily'][today] = s['daily'].get(today, 0) + 1
+        cutoff = (datetime.date.today() - datetime.timedelta(days=STATS_DAILY_KEEP)).isoformat()
+        s['daily'] = {d: n for d, n in s['daily'].items() if d >= cutoff}
+        tmp = STATS_FILE + '.tmp'
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump(s, f)
+        os.replace(tmp, STATS_FILE)
+
+
+def get_stats():
+    with _stats_lock:
+        s = _load_stats()
+    today = datetime.date.today().isoformat()
+    week_ago = (datetime.date.today() - datetime.timedelta(days=6)).isoformat()
+    return {
+        'ok': True,
+        'total': s['total'],
+        'today': s['daily'].get(today, 0),
+        'last7': sum(n for d, n in s['daily'].items() if d >= week_ago),
+    }
+
+
 class Handler(BaseHTTPRequestHandler):
     def _cors(self):
         self.send_header('Access-Control-Allow-Origin', '*')
-        self.send_header('Access-Control-Allow-Methods', 'POST, OPTIONS')
+        self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
         self.send_header('Access-Control-Allow-Headers', 'Content-Type, X-Schedule-Token')
 
     def do_OPTIONS(self):
         self.send_response(204)
         self._cors()
         self.end_headers()
+
+    def do_GET(self):
+        # 只读聚合统计：总量/今日/近7天。无个人数据，无需鉴权。
+        if self.path == '/api/schedule/stats':
+            self._json(200, get_stats())
+            return
+        self._json(404, {'ok': False, 'error': 'not found'})
 
     def do_POST(self):
         if self.path != '/api/schedule/upload':
@@ -121,7 +174,7 @@ class Handler(BaseHTTPRequestHandler):
             with open(path + '.tmp', 'w', encoding='utf-8') as f:
                 f.write(ics)
             os.replace(path + '.tmp', path)
-            # TODO: 改成你自己的对外域名
+            record_upload()
             url = f'https://agenttrust.site/api/schedule/{key}.ics'
             self._json(200, {'ok': True, 'icsUrl': url})
         except Exception:
