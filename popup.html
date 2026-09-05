@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      width: 380px;
+      font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+      background: #faf8f5;
+      color: #3a3835;
+      padding: 18px;
+    }
+    h1 { font-size: 16px; margin-bottom: 4px; }
+    .sub { font-size: 11px; color: #6b6763; margin-bottom: 14px; line-height: 1.6; }
+    .sub a { color: #3d7899; word-break: break-all; }
+    .btn {
+      width: 100%;
+      padding: 10px;
+      border: none;
+      border-radius: 10px;
+      background: #c47d00;
+      color: #fff;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .btn:disabled { background: #a8a49e; cursor: not-allowed; }
+    .btn.secondary { background: #3d7899; margin-top: 8px; }
+    .status { font-size: 12px; margin-top: 10px; color: #6b6763; min-height: 16px; }
+    .status.error { color: #c0392b; }
+    .status.ok { color: #1e7e34; }
+    #qrSection { display: none; margin-top: 14px; }
+    .qr-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+    .qr-card {
+      background: #fff;
+      border-radius: 12px;
+      padding: 10px;
+      text-align: center;
+      box-shadow: 0 1px 4px rgba(58,56,53,.08);
+    }
+    .qr-card img { width: 100%; image-rendering: pixelated; }
+    .qr-card .label { font-size: 12px; font-weight: 600; margin-top: 6px; }
+    .qr-card .hint { font-size: 10px; color: #6b6763; margin-top: 2px; line-height: 1.4; }
+    .dl { margin-top: 14px; }
+    .dl a {
+      display: block; text-align: center; text-decoration: none;
+      font-size: 12px; color: #3d7899; padding: 8px; background: #fff;
+      border-radius: 8px; margin-bottom: 6px; word-break: break-all;
+    }
+    details { margin-top: 10px; font-size: 11px; color: #6b6763; }
+    details summary { cursor: pointer; }
+    label.set { display: flex; align-items: center; gap: 6px; margin-top: 10px; font-size: 12px; }
+    label.set input { width: 90px; padding: 4px 6px; border: 1px solid #ddd; border-radius: 6px; font-size: 12px; }
+    label.set select { padding: 4px; border: 1px solid #ddd; border-radius: 6px; font-size: 12px; }
+    .more { margin-top: 14px; text-align: center; font-size: 12px; }
+    .more a { color: #3d7899; }
+  </style>
+</head>
+<body>
+  <h1>人大课表 → 日历</h1>
+  <div class="sub">
+    需先点开 <a href="https://jw.ruc.edu.cn/Njw2017/index.html#/student/student-course-list/" target="_blank">教务系统课表页</a>，并进入「课表查看」页面后再使用本插件
+  </div>
+
+  <button class="btn" id="btnExtract">读取课表并生成二维码</button>
+  <div class="status" id="status">未读取</div>
+
+  <label class="set">
+    第1周周一：
+    <input type="date" id="startDate" value="2026-09-07">
+    周数：
+    <select id="weeks"><option>16</option><option>17</option><option>18</option></select>
+  </label>
+
+  <button class="btn secondary" id="btnUpload">重新上传并刷新二维码</button>
+
+  <div id="qrSection">
+    <div class="qr-grid">
+      <div class="qr-card">
+        <img id="qrAndroid" alt="安卓二维码">
+        <div class="label">📱 Android</div>
+        <div class="hint">扫码下载 .ics 文件<br>用「日历」App 打开导入</div>
+      </div>
+      <div class="qr-card">
+        <img id="qrIOS" alt="苹果二维码">
+        <div class="label">🍎 iPhone / iPad</div>
+        <div class="hint">相机扫码 → 提示订阅<br>点「订阅」自动同步到日历</div>
+      </div>
+    </div>
+    <div class="dl">
+      <a id="linkAndroid" target="_blank">ICS 下载链接</a>
+      <a id="linkIOS" target="_blank">订阅链接（webcal）</a>
+    </div>
+  </div>
+
+  <details>
+    <summary>上传说明 / 隐私</summary>
+    <div style="margin-top:6px;">课表数据仅保存在你的浏览器本地（chrome.storage），读取成功后才上传到你配置的服务器生成可扫码的链接（本项目默认演示服务器 3 天后自动删除，自部署请自行配置）。ICS 不含姓名、学号，仅课程/时间/地点。</div>
+  </details>
+
+  <div class="more"><a href="https://sch.agenttrust.site/" target="_blank">更多信息 →</a></div>
+
+  <script src="ics.js"></script>
+  <script src="qrcode.min.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>
