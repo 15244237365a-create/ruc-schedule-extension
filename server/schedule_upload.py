@@ -13,8 +13,10 @@ POST /api/schedule/upload   body: {"ics": "...", "meta": {...}}，需带 X-Sched
     不碰服务器上任何其他文件）
 """
 import datetime
+import hashlib
 import json
 import os
+import re
 import secrets
 import threading
 import time
@@ -100,10 +102,22 @@ def _load_stats():
     return s
 
 
-def record_upload():
+def fingerprint(ics_text):
+    """课表内容指纹：剥掉每次生成都不同的 DTSTAMP/UID 后取哈希。
+    同一份课表重复生成 → 同一指纹 → 只算一个人。单向哈希，无法还原课表。"""
+    stripped = re.sub(r'^(DTSTAMP|UID):.*$', '', ics_text, flags=re.M)
+    return hashlib.sha256(stripped.encode()).hexdigest()[:16]
+
+
+def record_upload(ics_text):
+    fp = fingerprint(ics_text)
     today = datetime.date.today().isoformat()
     with _stats_lock:
         s = _load_stats()
+        s.setdefault('people', {})
+        if fp not in s['people']:
+            s['people'][fp] = today          # 首次出现日期
+        s['people'][fp] = s['people'][fp]    # 保留首次日期（可追溯活跃）
         s['total'] += 1
         s['daily'][today] = s['daily'].get(today, 0) + 1
         cutoff = (datetime.date.today() - datetime.timedelta(days=STATS_DAILY_KEEP)).isoformat()
@@ -114,17 +128,22 @@ def record_upload():
         os.replace(tmp, STATS_FILE)
 
 
-def get_stats():
+def get_stats(include_people):
+    """公开接口只返回人次（总量/今日/近7天）；带有效口令才返回去重人数。"""
     with _stats_lock:
         s = _load_stats()
     today = datetime.date.today().isoformat()
     week_ago = (datetime.date.today() - datetime.timedelta(days=6)).isoformat()
-    return {
+    out = {
         'ok': True,
         'total': s['total'],
         'today': s['daily'].get(today, 0),
         'last7': sum(n for d, n in s['daily'].items() if d >= week_ago),
     }
+    if include_people:
+        out['people'] = len(s.get('people', {}))
+        out['people_first_seen'] = sorted(s.get('people', {}).values()) or None
+    return out
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -139,9 +158,10 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self):
-        # 只读聚合统计：总量/今日/近7天。无个人数据，无需鉴权。
+        # /api/schedule/stats：公开返回人次；带有效 X-Schedule-Token 才附加去重人数
         if self.path == '/api/schedule/stats':
-            self._json(200, get_stats())
+            token_ok = secrets.compare_digest(self.headers.get('X-Schedule-Token') or '', TOKEN)
+            self._json(200, get_stats(include_people=token_ok))
             return
         self._json(404, {'ok': False, 'error': 'not found'})
 
@@ -174,7 +194,7 @@ class Handler(BaseHTTPRequestHandler):
             with open(path + '.tmp', 'w', encoding='utf-8') as f:
                 f.write(ics)
             os.replace(path + '.tmp', path)
-            record_upload()
+            record_upload(ics)
             url = f'https://agenttrust.site/api/schedule/{key}.ics'
             self._json(200, {'ok': True, 'icsUrl': url})
         except Exception:

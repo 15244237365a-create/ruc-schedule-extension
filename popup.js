@@ -199,7 +199,7 @@ function makeQRDataURL(text) {
     const s = await res.json();
     if (s && s.ok && s.total > 0) {
       const line = $('usageLine');
-      line.innerHTML = `同学们已生成 <strong>${Number(s.total).toLocaleString()}</strong> 份课表`;
+      line.innerHTML = `累计已生成 <strong>${Number(s.total).toLocaleString()}</strong> 份课表`;
       line.hidden = false;
     }
   } catch (e) { /* 静默 */ }
