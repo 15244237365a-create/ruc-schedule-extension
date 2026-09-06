@@ -55,26 +55,44 @@ function fmtDate(d) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-// 找到教务系统「课表查看」页 tab（可能在任意窗口，不一定是当前活跃 tab）
+// 教务系统「课表查看」页特征（hash 路由以此结尾）
 const COURSE_LIST_SUFFIX = '/student/student-course-list/';
 
-async function findJwTab() {
-  const tabs = await chrome.tabs.query({ url: 'https://jw.ruc.edu.cn/*' });
-  // 只要课表查看页（hash 路由以 /student/student-course-list/ 结尾）
-  for (const t of tabs) {
-    if ((t.url || '').endsWith(COURSE_LIST_SUFFIX)) return t;
+// 向单个 tab 发消息；内容脚本缺失（装扩展前就开着的旧标签页）时自动注入后重试
+async function tryExtractFromTab(tabId) {
+  try {
+    const resp = await chrome.tabs.sendMessage(tabId, { type: 'RUC_EXTRACT' });
+    return { resp };
+  } catch (e) {
+    const msg = String(e && e.message || e);
+    if (!/Receiving end does not exist|Could not establish connection/i.test(msg)) {
+      return { error: msg };
+    }
+    // 内容脚本没注入：动态注入 ics.js + content.js 后重试一次
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId },
+        files: ['ics.js', 'content.js'],
+      });
+    } catch (e2) {
+      return { error: '自动注入失败：' + (e2 && e2.message || e2) };
+    }
+    try {
+      const resp = await chrome.tabs.sendMessage(tabId, { type: 'RUC_EXTRACT' });
+      return { resp };
+    } catch (e2) {
+      return { error: String(e2 && e2.message || e2) };
+    }
   }
-  return null;
 }
 
-// 抓取课表
+// 抓取课表：遍历所有课表查看 tab，任何一个成功即用
 async function extract() {
-  const tab = await findJwTab();
-  if (!tab) {
-    // 没找到课表查看页：如果用户开着教务系统其他页，引导他点过去
-    const anyJw = await chrome.tabs.query({ url: 'https://jw.ruc.edu.cn/*' });
+  const tabs = await chrome.tabs.query({ url: 'https://jw.ruc.edu.cn/*' });
+  const courseTabs = tabs.filter(t => (t.url || '').endsWith(COURSE_LIST_SUFFIX));
+  if (!courseTabs.length) {
     setStatus(
-      anyJw.length
+      tabs.length
         ? '当前不在课表查看页——请点击上方链接进入「课表查看」页，等课表显示出来后再点'
         : '未找到教务系统页面——请先点上方链接打开课表页并登录',
       'error'
@@ -82,22 +100,19 @@ async function extract() {
     return null;
   }
   setStatus('读取课表中…');
-  let resp;
-  try {
-    resp = await chrome.tabs.sendMessage(tab.id, { type: 'RUC_EXTRACT' });
-  } catch (e) {
-    setStatus('抓取失败：请刷新教务页面后重试（' + (e.message || e) + '）', 'error');
-    return null;
+
+  let lastError = '';
+  for (const tab of courseTabs) {
+    const { resp, error } = await tryExtractFromTab(tab.id);
+    if (resp && resp.ok) {
+      if (resp.courses.length) return resp;
+      lastError = '没有解析到课程——请确认课表已加载';
+      continue;
+    }
+    lastError = (resp && resp.error) || error || lastError || '未知错误';
   }
-  if (!resp || !resp.ok) {
-    setStatus('抓取失败：' + (resp && resp.error || '未知错误'), 'error');
-    return null;
-  }
-  if (!resp.courses.length) {
-    setStatus('没有解析到课程——请确认已进入「课表查看」页且课表已加载', 'error');
-    return null;
-  }
-  return resp;
+  setStatus('抓取失败：' + lastError + '（若反复出现，请刷新教务页面后再试）', 'error');
+  return null;
 }
 
 // 生成 ICS 并存本地
