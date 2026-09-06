@@ -55,8 +55,20 @@ function fmtDate(d) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-// 研究生教育信息系统入口（课表在该页面的同源 iframe 内）
-const COURSE_PAGE_PATH = '/gsapp/sys/yjsemaphome/portal/index.do';
+const UNDERGRAD_COURSE_SUFFIX = '/student/student-course-list/';
+const GRADUATE_COURSE_PATH = '/gsapp/sys/yjsemaphome/portal/index.do';
+
+function isCoursePage(url) {
+  try {
+    const parsed = new URL(url || '');
+    return (
+      (parsed.hostname === 'jw.ruc.edu.cn' && parsed.href.endsWith(UNDERGRAD_COURSE_SUFFIX)) ||
+      (parsed.hostname === 'yjs2.ruc.edu.cn' && parsed.pathname === GRADUATE_COURSE_PATH)
+    );
+  } catch (e) {
+    return false;
+  }
+}
 
 // 向单个 tab 发消息；内容脚本缺失（装扩展前就开着的旧标签页）时自动注入后重试
 async function tryExtractFromTab(tabId) {
@@ -88,16 +100,16 @@ async function tryExtractFromTab(tabId) {
 
 // 抓取课表：遍历所有课表查看 tab，任何一个成功即用
 async function extract() {
-  const tabs = await chrome.tabs.query({ url: 'https://yjs2.ruc.edu.cn/*' });
-  const courseTabs = tabs.filter(t => {
-    try { return new URL(t.url || '').pathname === COURSE_PAGE_PATH; }
-    catch (e) { return false; }
+  const tabs = await chrome.tabs.query({
+    url: ['https://jw.ruc.edu.cn/*', 'https://yjs2.ruc.edu.cn/*'],
   });
+  const courseTabs = tabs.filter(t => isCoursePage(t.url));
+  courseTabs.sort((a, b) => Number(Boolean(b.active)) - Number(Boolean(a.active)));
   if (!courseTabs.length) {
     setStatus(
       tabs.length
-        ? '当前不在学生课程表页——请进入「我的课表 → 学生课程表」，等课表显示出来后再点'
-        : '未找到研究生教育信息系统页面——请先点上方链接打开系统并登录',
+        ? '当前不在课表页——本科生请进入「课表查看」，研究生请进入「我的课表 → 学生课程表」'
+        : '未找到本科或研究生教务系统页面——请先点上方对应链接并登录',
       'error'
     );
     return null;
@@ -114,7 +126,7 @@ async function extract() {
     }
     lastError = (resp && resp.error) || error || lastError || '未知错误';
   }
-  setStatus('抓取失败：' + lastError + '（若反复出现，请刷新研究生系统页面后再试）', 'error');
+  setStatus('抓取失败：' + lastError + '（若反复出现，请刷新课表页面后再试）', 'error');
   return null;
 }
 

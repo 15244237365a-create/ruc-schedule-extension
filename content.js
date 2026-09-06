@@ -1,21 +1,86 @@
 /**
- * 内容脚本：在 yjs2.ruc.edu.cn 研究生教育信息系统页面上运行。
- * 注入「我的课表 → 学生课程表」iframe，并解析其中的课程列表，
+ * 内容脚本：同时支持人大本科与研究生课表。
+ *   - 本科：jw.ruc.edu.cn「课表查看」页面
+ *   - 研究生：yjs2.ruc.edu.cn「我的课表 → 学生课程表」iframe
  * 响应 popup 的 RUC_EXTRACT 消息。
  */
 'use strict';
 
-const WEEK_RE = /(\d+)\s*-\s*(\d+)\s*周(?:\s*[\[（(]?(单|双)周?[\]）)]?)?/;
+// ===== 本科教学管理一体化信息服务平台 =====
 
-function getScheduleDocument() {
-  return document;
+const UNDERGRAD_SLOT_RE = /^([^/\s]+)\/(\d+)-(\d+)节\/(\d+)-(\d+)周(单周|双周)?$/;
+
+function parseUndergraduateScheduleCell(text) {
+  const match = text.match(UNDERGRAD_SLOT_RE);
+  if (!match) return null;
+  const slot = {
+    location: match[1].trim(),
+    startSection: Number(match[2]),
+    endSection: Number(match[3]),
+    startWeek: Number(match[4]),
+    endWeek: Number(match[5]),
+    weekFlag: match[6] || '',
+  };
+  if (slot.weekFlag === '单周') slot.oddWeeksOnly = true;
+  if (slot.weekFlag === '双周') slot.evenWeeksOnly = true;
+  return slot;
 }
 
-function courseNamesByCode(doc) {
+function parseUndergraduateCell(cell) {
+  const out = [];
+  let currentName = null;
+  for (const div of cell.querySelectorAll('div')) {
+    if (div.children.length !== 0) continue;
+    const text = (div.textContent || '').trim();
+    if (!text) continue;
+    const style = div.getAttribute('style') || '';
+    if (style.includes('rgb(0, 192, 239)') || style.includes('rgb(0,192,239)')) {
+      currentName = text;
+      continue;
+    }
+    const slot = parseUndergraduateScheduleCell(text);
+    if (slot && currentName) out.push({ name: currentName, ...slot });
+  }
+  return out;
+}
+
+function parseUndergraduateScheduleFromDOM(doc) {
+  const target = Array.from(doc.querySelectorAll('table'))
+    .find(table => /\d+-\d+节\//.test(table.textContent || ''));
+  if (!target) return [];
+
+  const courseMap = new Map();
+  const seen = new Set();
+  for (const row of target.querySelectorAll('tr')) {
+    const cells = Array.from(row.querySelectorAll('td, th'));
+    for (let index = 1; index < cells.length; index++) {
+      const weekday = index;
+      const cell = cells[index];
+      const raw = (cell.textContent || '').trim();
+      if (!raw) continue;
+      const key = weekday + '|' + raw.replace(/\s+/g, '');
+      if (seen.has(key)) continue;
+      seen.add(key);
+
+      for (const item of parseUndergraduateCell(cell)) {
+        if (!courseMap.has(item.name)) courseMap.set(item.name, []);
+        const { name, ...slot } = item;
+        slot.weekday = weekday;
+        courseMap.get(item.name).push(slot);
+      }
+    }
+  }
+  return Array.from(courseMap, ([name, slots]) => ({ name, slots }));
+}
+
+// ===== 研究生教育信息系统 =====
+
+const GRADUATE_WEEK_RE = /(\d+)\s*-\s*(\d+)\s*周(?:\s*[\[（(]?(单|双)周?[\]）)]?)?/;
+
+function graduateCourseNamesByCode(doc) {
   const names = new Map();
-  const tables = Array.from(doc.querySelectorAll('table'));
-  const table = tables.find(t => {
-    const text = t.textContent || '';
+  const table = Array.from(doc.querySelectorAll('table')).find(candidate => {
+    const text = candidate.textContent || '';
     return text.includes('课程代码') && text.includes('课程名称');
   });
   if (!table) return names;
@@ -38,33 +103,31 @@ function courseNamesByCode(doc) {
   return names;
 }
 
-function sectionEndTimes(table) {
+function graduateSectionEndTimes(table) {
   const endTimes = new Map();
   for (const row of Array.from(table.rows || [])) {
     const cells = Array.from(row.cells || []);
     if (cells.length < 2) continue;
     const sectionMatch = (cells[0].textContent || '').match(/第\s*(\d+)\s*节/);
     const timeMatch = (cells[1].textContent || '').match(/\d{2}:\d{2}\s*[~～-]\s*(\d{2}:\d{2})/);
-    if (sectionMatch && timeMatch) {
-      endTimes.set(Number(sectionMatch[1]), timeMatch[1]);
-    }
+    if (sectionMatch && timeMatch) endTimes.set(Number(sectionMatch[1]), timeMatch[1]);
   }
   return endTimes;
 }
 
-function fallbackCourseName(courseLine) {
+function fallbackGraduateCourseName(courseLine) {
   const rest = courseLine.replace(/^[^-]+-/, '').trim();
   return rest.replace(/[（(][^（）()]*[）)]\s*$/, '').trim() || rest;
 }
 
-function parseScheduleFromDOM() {
-  const doc = getScheduleDocument();
+function parseGraduateScheduleFromDOM(doc) {
   const table = doc.querySelector('#jsTbl_01') ||
-    Array.from(doc.querySelectorAll('table')).find(t => t.querySelector('td[xq][jc] .kb_item'));
+    Array.from(doc.querySelectorAll('table'))
+      .find(candidate => candidate.querySelector('td[xq][jc] .kb_item'));
   if (!table) return [];
 
-  const nameMap = courseNamesByCode(doc);
-  const endTimes = sectionEndTimes(table);
+  const nameMap = graduateCourseNamesByCode(doc);
+  const endTimes = graduateSectionEndTimes(table);
   const courseMap = new Map();
   const seen = new Set();
 
@@ -80,15 +143,14 @@ function parseScheduleFromDOM() {
       const lines = Array.from(card.children)
         .map(item => (item.textContent || '').replace(/\s+/g, ' ').trim())
         .filter(Boolean);
-      const fullText = lines.join(' ');
-      const weekMatch = fullText.match(WEEK_RE);
+      const weekMatch = lines.join(' ').match(GRADUATE_WEEK_RE);
       const courseLineIndex = lines.findIndex(line => /^[A-Za-z0-9]+-/.test(line));
       if (!weekMatch || courseLineIndex < 0) continue;
 
       const courseLine = lines[courseLineIndex];
       const codeMatch = courseLine.match(/^([A-Za-z0-9]+)-/);
       const code = codeMatch ? codeMatch[1] : '';
-      const name = nameMap.get(code) || fallbackCourseName(courseLine);
+      const name = nameMap.get(code) || fallbackGraduateCourseName(courseLine);
       const location = lines[courseLineIndex + 2] || '';
       const startWeek = Number(weekMatch[1]);
       const endWeek = Number(weekMatch[2]);
@@ -110,6 +172,7 @@ function parseScheduleFromDOM() {
       if (endTime) slot.endTime = endTime;
       if (weekFlag === '单周') slot.oddWeeksOnly = true;
       if (weekFlag === '双周') slot.evenWeeksOnly = true;
+
       if (!courseMap.has(name)) courseMap.set(name, []);
       const slots = courseMap.get(name);
       const adjacent = slots.find(existing =>
@@ -135,39 +198,70 @@ function parseScheduleFromDOM() {
   return Array.from(courseMap, ([name, slots]) => ({ name, slots }));
 }
 
-function normalizeSemester(text) {
+function normalizeGraduateSemester(text) {
   const raw = (text || '').replace(/\s+/g, ' ').trim();
   const match = raw.match(/(20\d{2}-20\d{2})学年\s*第([一二])学期/);
   if (!match) return raw;
   return `${match[1]}学年${match[2] === '一' ? '秋季' : '春季'}学期`;
 }
 
+// ===== 统一入口 =====
+
+function pageType() {
+  if (
+    location.hostname === 'jw.ruc.edu.cn' &&
+    window.top === window &&
+    location.hash.endsWith('/student/student-course-list/')
+  ) return 'undergraduate';
+
+  if (
+    location.hostname === 'yjs2.ruc.edu.cn' &&
+    location.pathname.includes('/wdkbapp/') &&
+    location.hash.includes('/xskcb')
+  ) return 'graduate';
+
+  return '';
+}
+
 function extractCourses() {
-  const doc = getScheduleDocument();
-  const semesterSelect = doc.querySelector('#query_xnxq');
-  const semester = normalizeSemester(
-    semesterSelect && semesterSelect.selectedOptions.length
-      ? semesterSelect.selectedOptions[0].textContent
-      : ''
-  );
-  return {
-    courses: parseScheduleFromDOM(),
-    semester,
-    url: location.href,
-    title: document.title,
-  };
+  const type = pageType();
+  let courses = [];
+  let semester = '';
+
+  if (type === 'undergraduate') {
+    courses = parseUndergraduateScheduleFromDOM(document);
+    for (const input of document.querySelectorAll('input')) {
+      if ((input.value || '').includes('学年')) {
+        semester = input.value.trim();
+        break;
+      }
+    }
+  } else if (type === 'graduate') {
+    courses = parseGraduateScheduleFromDOM(document);
+    const semesterSelect = document.querySelector('#query_xnxq');
+    semester = normalizeGraduateSemester(
+      semesterSelect && semesterSelect.selectedOptions.length
+        ? semesterSelect.selectedOptions[0].textContent
+        : ''
+    );
+  }
+
+  return { courses, semester, source: type, url: location.href, title: document.title };
+}
+
+function parseScheduleFromDOM() {
+  const type = pageType();
+  if (type === 'undergraduate') return parseUndergraduateScheduleFromDOM(document);
+  if (type === 'graduate') return parseGraduateScheduleFromDOM(document);
+  return [];
 }
 
 if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.onMessage) {
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (msg && msg.type === 'RUC_EXTRACT') {
-      // 只让实际承载课表的 iframe 响应，避免顶层门户页抢先返回空结果。
-      if (!location.pathname.includes('/wdkbapp/') || !location.hash.includes('/xskcb')) {
-        return false;
-      }
+      if (!pageType()) return false;
       try {
-        const result = extractCourses();
-        sendResponse({ ok: true, ...result });
+        sendResponse({ ok: true, ...extractCourses() });
       } catch (e) {
         sendResponse({ ok: false, error: String(e && e.message || e) });
       }
@@ -177,5 +271,12 @@ if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.onMessage)
 }
 
 if (typeof globalThis !== 'undefined') {
-  globalThis.RUC_CONTENT = { extractCourses, parseScheduleFromDOM, normalizeSemester };
+  globalThis.RUC_CONTENT = {
+    extractCourses,
+    parseScheduleFromDOM,
+    parseUndergraduateScheduleCell,
+    parseUndergraduateScheduleFromDOM,
+    parseGraduateScheduleFromDOM,
+    normalizeGraduateSemester,
+  };
 }
