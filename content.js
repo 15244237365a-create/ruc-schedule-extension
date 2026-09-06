@@ -1,14 +1,119 @@
 /**
- * 内容脚本：在 yjs2.ruc.edu.cn 研究生教育信息系统页面上运行。
- * 注入「我的课表 → 学生课程表」iframe，并解析其中的课程列表，
- * 响应 popup 的 RUC_EXTRACT 消息。
+ * 内容脚本：同时支持两个课表来源，按所在页面自动分流：
+ *   1. 本科教务系统 jw.ruc.edu.cn「课表查看」页（顶层页面解析）
+ *   2. 研究生教育信息系统 yjs2.ruc.edu.cn「我的课表 → 学生课程表」iframe
+ *
+ * 本科解析规则（2026-09-05 在真实页面验证，叶子 div 级解析）：
+ *   - 课表 = 含 "x-y节/" 文本的 <table>；每行 8 个 td，td[1..7] 对应周一~周日
+ *   - 蓝色 div（rgb(0,192,239)）= 课程名；slot div 形如 "教二2221/1-3节/1-16周[单周|双周]"
+ *   - 跨大节的课渲染成多个相同格，按 key = weekday + 归一化文本 去重
+ *
+ * 研究生解析规则（PR#1，2026-09-06 合并）：
+ *   - 课表 iframe 内 #jsTbl_01（或含 td[xq][jc] .kb_item 的表格）
+ *   - td 的 xq/jc 属性 = 星期/起始节次，rowspan = 连堂节数
+ *   - 课程卡片 .arrage.kb_item 里含 "课程代码-课名"、"周次"、教室
+ *   - 课程代码 → 课程名映射来自「课程代码/课程名称」汇总表
+ *   - 只让承载课表的 iframe 响应消息，避免门户顶层页抢答空结果
  */
 'use strict';
 
+// ============================================================
+// 本科（jw.ruc.edu.cn）解析
+// ============================================================
+
+// "教一1406/1-2节/1-16周单周" → 结构化 slot（教室部分不含 / 和空白）
+const SLOT_RE = /^([^/\s]+)\/(\d+)-(\d+)节\/(\d+)-(\d+)周(单周|双周)?$/;
+function parseScheduleCell(text) {
+  const m = text.match(SLOT_RE);
+  if (!m) return null;
+  const slot = {
+    location: m[1].trim(),
+    startSection: parseInt(m[2], 10),
+    endSection: parseInt(m[3], 10),
+    startWeek: parseInt(m[4], 10),
+    endWeek: parseInt(m[5], 10),
+    weekFlag: m[6] || '',
+  };
+  if (slot.weekFlag === '单周') slot.oddWeeksOnly = true;
+  if (slot.weekFlag === '双周') slot.evenWeeksOnly = true;
+  return slot;
+}
+
+// 解析单个课程格 → [{name, location, startSection, ...}]（不含 weekday）
+function parseCell(cell) {
+  const out = [];
+  let curName = null;
+  for (const dv of cell.querySelectorAll('div')) {
+    if (dv.children.length !== 0) continue; // 只看叶子 div
+    const dt = (dv.textContent || '').trim();
+    if (!dt) continue;
+    const st = dv.getAttribute('style') || '';
+    if (st.includes('rgb(0, 192, 239)') || st.includes('rgb(0,192,239)')) {
+      curName = dt;
+      continue;
+    }
+    const slot = parseScheduleCell(dt);
+    if (slot) {
+      if (!curName) continue;
+      out.push({ name: curName, ...slot });
+    }
+  }
+  return out;
+}
+
+function parseUndergradFromDOM() {
+  const tables = Array.from(document.querySelectorAll('table'));
+  let target = null;
+  for (const t of tables) {
+    if (/\d+-\d+节\//.test(t.textContent)) { target = t; break; }
+  }
+  if (!target) return [];
+
+  const rows = Array.from(target.querySelectorAll('tr'));
+  const courseMap = new Map();
+  const seen = new Set();
+
+  for (const row of rows) {
+    const cells = Array.from(row.querySelectorAll('td, th'));
+    for (let i = 1; i < cells.length; i++) {
+      const weekday = i; // 1=周一 … 7=周日
+      const cell = cells[i];
+      const raw = (cell.textContent || '').trim();
+      if (!raw) continue;
+      const key = weekday + '|' + raw.replace(/\s+/g, '');
+      if (seen.has(key)) continue;
+      seen.add(key);
+
+      for (const item of parseCell(cell)) {
+        if (!courseMap.has(item.name)) courseMap.set(item.name, []);
+        const { name, ...slot } = item;
+        slot.weekday = weekday;
+        courseMap.get(item.name).push(slot);
+      }
+    }
+  }
+
+  const courses = [];
+  for (const [name, slots] of courseMap) courses.push({ name, slots });
+  return courses;
+}
+
+function extractUndergradSemester() {
+  for (const inp of document.querySelectorAll('input')) {
+    if ((inp.value || '').includes('学年')) return inp.value.trim();
+  }
+  return '';
+}
+
+// ============================================================
+// 研究生（yjs2.ruc.edu.cn）解析
+// ============================================================
+
 const WEEK_RE = /(\d+)\s*-\s*(\d+)\s*周(?:\s*[\[（(]?(单|双)周?[\]）)]?)?/;
 
-function getScheduleDocument() {
-  return document;
+function findGradTimetable(doc) {
+  return doc.querySelector('#jsTbl_01') ||
+    Array.from(doc.querySelectorAll('table')).find(t => t.querySelector('td[xq][jc] .kb_item'));
 }
 
 function courseNamesByCode(doc) {
@@ -57,10 +162,9 @@ function fallbackCourseName(courseLine) {
   return rest.replace(/[（(][^（）()]*[）)]\s*$/, '').trim() || rest;
 }
 
-function parseScheduleFromDOM() {
-  const doc = getScheduleDocument();
-  const table = doc.querySelector('#jsTbl_01') ||
-    Array.from(doc.querySelectorAll('table')).find(t => t.querySelector('td[xq][jc] .kb_item'));
+function parseGradFromDOM(gradTable) {
+  const doc = document;
+  const table = gradTable || findGradTimetable(doc);
   if (!table) return [];
 
   const nameMap = courseNamesByCode(doc);
@@ -135,24 +239,48 @@ function parseScheduleFromDOM() {
   return Array.from(courseMap, ([name, slots]) => ({ name, slots }));
 }
 
-function normalizeSemester(text) {
+function normalizeGradSemester(text) {
   const raw = (text || '').replace(/\s+/g, ' ').trim();
   const match = raw.match(/(20\d{2}-20\d{2})学年\s*第([一二])学期/);
   if (!match) return raw;
   return `${match[1]}学年${match[2] === '一' ? '秋季' : '春季'}学期`;
 }
 
-function extractCourses() {
-  const doc = getScheduleDocument();
-  const semesterSelect = doc.querySelector('#query_xnxq');
-  const semester = normalizeSemester(
+function extractGradCourses() {
+  const semesterSelect = document.querySelector('#query_xnxq');
+  const semester = normalizeGradSemester(
     semesterSelect && semesterSelect.selectedOptions.length
       ? semesterSelect.selectedOptions[0].textContent
       : ''
   );
   return {
-    courses: parseScheduleFromDOM(),
+    courses: parseGradFromDOM(null),
     semester,
+    url: location.href,
+    title: document.title,
+  };
+}
+
+// ============================================================
+// 分发：按所在页面/页面特征选择解析器
+// ============================================================
+
+function isGradPage() {
+  try { return location.hostname === 'yjs2.ruc.edu.cn'; } catch (e) { return false; }
+}
+
+function parseScheduleFromDOM() {
+  // 研究生课表 iframe：存在特征表格即走研究生解析
+  if (findGradTimetable(document)) return parseGradFromDOM(null);
+  // 其余（本科教务页）走本科解析
+  return parseUndergradFromDOM();
+}
+
+function extractCourses() {
+  if (isGradPage()) return extractGradCourses();
+  return {
+    courses: parseScheduleFromDOM(),
+    semester: extractUndergradSemester(),
     url: location.href,
     title: document.title,
   };
@@ -161,8 +289,9 @@ function extractCourses() {
 if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.onMessage) {
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (msg && msg.type === 'RUC_EXTRACT') {
-      // 只让实际承载课表的 iframe 响应，避免顶层门户页抢先返回空结果。
-      if (!location.pathname.includes('/wdkbapp/') || !location.hash.includes('/xskcb')) {
+      // 研究生系统：只让实际承载课表的 iframe 响应，避免顶层门户页抢先返回空结果。
+      if (isGradPage() &&
+          !(location.pathname.includes('/wdkbapp/') && location.hash.includes('/xskcb'))) {
         return false;
       }
       try {
@@ -177,5 +306,12 @@ if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.onMessage)
 }
 
 if (typeof globalThis !== 'undefined') {
-  globalThis.RUC_CONTENT = { extractCourses, parseScheduleFromDOM, normalizeSemester };
+  globalThis.RUC_CONTENT = {
+    extractCourses,
+    parseScheduleFromDOM,
+    parseUndergradFromDOM,
+    parseGradFromDOM,
+    parseScheduleCell,
+    normalizeGradSemester,
+  };
 }
