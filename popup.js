@@ -55,8 +55,8 @@ function fmtDate(d) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-// 教务系统「课表查看」页特征（hash 路由以此结尾）
-const COURSE_LIST_SUFFIX = '/student/student-course-list/';
+// 研究生教育信息系统入口（课表在该页面的同源 iframe 内）
+const COURSE_PAGE_PATH = '/gsapp/sys/yjsemaphome/portal/index.do';
 
 // 向单个 tab 发消息；内容脚本缺失（装扩展前就开着的旧标签页）时自动注入后重试
 async function tryExtractFromTab(tabId) {
@@ -71,7 +71,7 @@ async function tryExtractFromTab(tabId) {
     // 内容脚本没注入：动态注入 ics.js + content.js 后重试一次
     try {
       await chrome.scripting.executeScript({
-        target: { tabId },
+        target: { tabId, allFrames: true },
         files: ['ics.js', 'content.js'],
       });
     } catch (e2) {
@@ -88,13 +88,16 @@ async function tryExtractFromTab(tabId) {
 
 // 抓取课表：遍历所有课表查看 tab，任何一个成功即用
 async function extract() {
-  const tabs = await chrome.tabs.query({ url: 'https://jw.ruc.edu.cn/*' });
-  const courseTabs = tabs.filter(t => (t.url || '').endsWith(COURSE_LIST_SUFFIX));
+  const tabs = await chrome.tabs.query({ url: 'https://yjs2.ruc.edu.cn/*' });
+  const courseTabs = tabs.filter(t => {
+    try { return new URL(t.url || '').pathname === COURSE_PAGE_PATH; }
+    catch (e) { return false; }
+  });
   if (!courseTabs.length) {
     setStatus(
       tabs.length
-        ? '当前不在课表查看页——请点击上方链接进入「课表查看」页，等课表显示出来后再点'
-        : '未找到教务系统页面——请先点上方链接打开课表页并登录',
+        ? '当前不在学生课程表页——请进入「我的课表 → 学生课程表」，等课表显示出来后再点'
+        : '未找到研究生教育信息系统页面——请先点上方链接打开系统并登录',
       'error'
     );
     return null;
@@ -111,7 +114,7 @@ async function extract() {
     }
     lastError = (resp && resp.error) || error || lastError || '未知错误';
   }
-  setStatus('抓取失败：' + lastError + '（若反复出现，请刷新教务页面后再试）', 'error');
+  setStatus('抓取失败：' + lastError + '（若反复出现，请刷新研究生系统页面后再试）', 'error');
   return null;
 }
 

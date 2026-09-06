@@ -9,7 +9,7 @@
     "tabs"
   ],
   "host_permissions": [
-    "https://jw.ruc.edu.cn/*",
+    "https://yjs2.ruc.edu.cn/*",
     "https://agenttrust.site/*"
   ],
   "action": {
@@ -28,12 +28,13 @@
   "content_scripts": [
     {
       "matches": [
-        "https://jw.ruc.edu.cn/*"
+        "https://yjs2.ruc.edu.cn/*"
       ],
       "js": [
         "ics.js",
         "content.js"
       ],
+      "all_frames": true,
       "run_at": "document_idle"
     }
   ]
