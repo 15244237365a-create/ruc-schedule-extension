@@ -1,6 +1,6 @@
 # RUC Schedule to Calendar（人大课表 → 日历）
 
-一款浏览器扩展：在教务系统「课表查看」页一键把课表转成 ICS 日历，并生成两个二维码——**Android 扫码下载 .ics**、**iPhone/iPad 扫码订阅日历**。教室自动写全称（如「中国人民大学立德楼407」），每节课课前 15 分钟提醒。
+一款浏览器扩展：在研究生教育信息系统「我的课表 → 学生课程表」页一键把课表转成 ICS 日历，并生成两个二维码——**Android 扫码下载 .ics**、**iPhone/iPad 扫码订阅日历**。教室自动写全称（如「中国人民大学立德楼407」），每节课课前 15 分钟提醒。
 
 > 本项目面向中国人民大学在校学生，与学校无隶属关系。服务端可完全自部署。
 
@@ -12,7 +12,7 @@
 
 ## 使用
 
-1. 登录教务系统，进入「课表查看」页（`jw.ruc.edu.cn/Njw2017/index.html#/student/student-course-list/`），等课表表格显示出来
+1. 登录研究生教育信息系统（`yjs2.ruc.edu.cn/gsapp/sys/yjsemaphome/portal/index.do`），进入「我的课表 → 学生课程表」，等课表表格显示出来
 2. 点插件图标 → 点「读取课表并生成二维码」
 3. 手机：Android 扫码下载 ics 用日历 App 打开；iPhone 扫码点「订阅」
 
@@ -58,8 +58,8 @@ Web 服务器（nginx/Caddy 任一）把 `https://你的域名/api/schedule/` �
 ## 目录结构
 
 ```
-manifest.json   MV3 配置（storage + tabs；host: 教务系统 + 你的上传域名）
-content.js      课表页 DOM 解析（叶子 div 级解析 + 去重）
+manifest.json   MV3 配置（storage + tabs；host: 研究生教育信息系统 + 你的上传域名）
+content.js      研究生课表 iframe DOM 解析（课程卡片解析 + 跨行合并）
 ics.js          ICS 生成（节次映射/时长/地点规范/VALARM）
 popup.html/js   弹窗 UI：读取 → 生成 → 上传 → 双二维码
 qrcode.min.js   二维码库（davidshimjs/qrcodejs，MIT）

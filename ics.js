@@ -85,7 +85,9 @@ function buildICS(courses, opts) {
       const endT = slot.endTime || null; // 'HH:MM' 特例覆盖
       const durH = endT ? null : defaultDurationHours(n);
 
-      for (let week = 1; week <= weeks; week++) {
+      const firstWeek = slot.startWeek || 1;
+      const lastWeek = Math.min(slot.endWeek || weeks, weeks);
+      for (let week = firstWeek; week <= lastWeek; week++) {
         if (slot.oddWeeksOnly && week % 2 === 0) continue;
         if (slot.evenWeeksOnly && week % 2 === 1) continue;
         // 第1周周一 + (wd-1)天 + (week-1)周
