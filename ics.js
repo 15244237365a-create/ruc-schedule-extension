@@ -58,7 +58,7 @@ function icalEscape(s) {
 function pad2(n) { return String(n).padStart(2, '0'); }
 
 // 生成 ICS 文本
-// courses: [{name, slots:[{weekday(1-7), startSection, endSection, location, endTime?, oddWeeksOnly?, evenWeeksOnly?}]}]
+// courses: [{name, slots:[{weekday(1-7), startSection, endSection, location, weeks?, endTime?, oddWeeksOnly?, evenWeeksOnly?}]}]
 // opts: {startDate: 'YYYY-MM-DD' (第1周周一), weeks: 16, calname}
 function buildICS(courses, opts) {
   const weeks = opts.weeks || 16;
@@ -85,9 +85,18 @@ function buildICS(courses, opts) {
       const endT = slot.endTime || null; // 'HH:MM' 特例覆盖
       const durH = endT ? null : defaultDurationHours(n);
 
-      const firstWeek = slot.startWeek || 1;
-      const lastWeek = Math.min(slot.endWeek || weeks, weeks);
-      for (let week = firstWeek; week <= lastWeek; week++) {
+      let activeWeeks;
+      if (Array.isArray(slot.weeks) && slot.weeks.length) {
+        activeWeeks = Array.from(new Set(slot.weeks.map(Number)))
+          .filter(week => Number.isInteger(week) && week >= 1 && week <= weeks)
+          .sort((a, b) => a - b);
+      } else {
+        const firstWeek = slot.startWeek || 1;
+        const lastWeek = Math.min(slot.endWeek || weeks, weeks);
+        activeWeeks = [];
+        for (let week = firstWeek; week <= lastWeek; week++) activeWeeks.push(week);
+      }
+      for (const week of activeWeeks) {
         if (slot.oddWeeksOnly && week % 2 === 0) continue;
         if (slot.evenWeeksOnly && week % 2 === 1) continue;
         // 第1周周一 + (wd-1)天 + (week-1)周

@@ -29,28 +29,17 @@ function parseUndergraduateScheduleCell(text) {
 function parseUndergraduateCell(cell) {
   const out = [];
   let currentName = null;
-  let pending = []; // 自上一个 slot 以来的叶子文本行
   for (const div of cell.querySelectorAll('div')) {
     if (div.children.length !== 0) continue;
     const text = (div.textContent || '').trim();
     if (!text) continue;
     const style = div.getAttribute('style') || '';
-    const slot = parseUndergraduateScheduleCell(text);
-    if (slot) {
-      // 课程名优先取蓝色 div；黑色字课程（暂无教学大纲、不可点击）回退取块首行
-      const name = currentName || (pending.length ? pending[0] : '');
-      if (!name) continue;
-      out.push({ name, ...slot });
-      currentName = null;
-      pending = [];
-      continue;
-    }
     if (style.includes('rgb(0, 192, 239)') || style.includes('rgb(0,192,239)')) {
       currentName = text;
-      pending = [];
-    } else {
-      pending.push(text);
+      continue;
     }
+    const slot = parseUndergraduateScheduleCell(text);
+    if (slot && currentName) out.push({ name: currentName, ...slot });
   }
   return out;
 }
@@ -86,7 +75,59 @@ function parseUndergraduateScheduleFromDOM(doc) {
 
 // ===== 研究生教育信息系统 =====
 
-const GRADUATE_WEEK_RE = /(\d+)\s*-\s*(\d+)\s*周(?:\s*[\[（(]?(单|双)周?[\]）)]?)?/;
+function parseGraduateWeeks(text) {
+  let raw = String(text || '').replace(/\s+/g, '');
+  if (!/\d/.test(raw) || !raw.includes('周')) return null;
+
+  const oddWeeksOnly = raw.includes('单');
+  const evenWeeksOnly = raw.includes('双');
+  if (oddWeeksOnly && evenWeeksOnly) return null;
+
+  // 去掉“研”“第”“周”“单/双”等说明，仅保留数字、区间和分隔符。
+  raw = raw.slice(raw.search(/\d/))
+    .replace(/第/g, '')
+    .replace(/周/g, '')
+    .replace(/[单双]/g, '')
+    .replace(/[\[\]【】()（）{}]/g, '')
+    .replace(/[–—－~～至]/g, '-')
+    .replace(/[，、;；/]/g, ',');
+
+  const tokens = raw.split(',').filter(Boolean);
+  if (!tokens.length) return null;
+
+  const weekSet = new Set();
+  for (const token of tokens) {
+    let start;
+    let end;
+    const range = token.match(/^(\d+)-(\d+)$/);
+    const single = token.match(/^\d+$/);
+    if (range) {
+      start = Number(range[1]);
+      end = Number(range[2]);
+    } else if (single) {
+      start = Number(token);
+      end = start;
+    } else {
+      return null;
+    }
+    if (start < 1 || end < start || end > 60) return null;
+    for (let week = start; week <= end; week++) weekSet.add(week);
+  }
+
+  let weeks = Array.from(weekSet).sort((a, b) => a - b);
+  if (oddWeeksOnly) weeks = weeks.filter(week => week % 2 === 1);
+  if (evenWeeksOnly) weeks = weeks.filter(week => week % 2 === 0);
+  if (!weeks.length) return null;
+
+  return {
+    weeks,
+    startWeek: weeks[0],
+    endWeek: weeks[weeks.length - 1],
+    weekFlag: oddWeeksOnly ? '单周' : (evenWeeksOnly ? '双周' : ''),
+    oddWeeksOnly,
+    evenWeeksOnly,
+  };
+}
 
 function graduateCourseNamesByCode(doc) {
   const names = new Map();
@@ -154,19 +195,19 @@ function parseGraduateScheduleFromDOM(doc) {
       const lines = Array.from(card.children)
         .map(item => (item.textContent || '').replace(/\s+/g, ' ').trim())
         .filter(Boolean);
-      const weekMatch = lines.join(' ').match(GRADUATE_WEEK_RE);
+      const weekLine = lines.find(line => /\d/.test(line) && line.includes('周'));
+      const weekInfo = parseGraduateWeeks(weekLine);
       const courseLineIndex = lines.findIndex(line => /^[A-Za-z0-9]+-/.test(line));
-      if (!weekMatch || courseLineIndex < 0) continue;
+      if (!weekInfo || courseLineIndex < 0) continue;
 
       const courseLine = lines[courseLineIndex];
       const codeMatch = courseLine.match(/^([A-Za-z0-9]+)-/);
       const code = codeMatch ? codeMatch[1] : '';
       const name = nameMap.get(code) || fallbackGraduateCourseName(courseLine);
       const location = lines[courseLineIndex + 2] || '';
-      const startWeek = Number(weekMatch[1]);
-      const endWeek = Number(weekMatch[2]);
-      const weekFlag = weekMatch[3] ? weekMatch[3] + '周' : '';
-      const key = [name, weekday, startSection, endSection, startWeek, endWeek, weekFlag, location].join('|');
+      const { weeks, startWeek, endWeek, weekFlag, oddWeeksOnly, evenWeeksOnly } = weekInfo;
+      const weekKey = weeks.join(',');
+      const key = [name, weekday, startSection, endSection, weekKey, location].join('|');
       if (seen.has(key)) continue;
       seen.add(key);
 
@@ -177,20 +218,20 @@ function parseGraduateScheduleFromDOM(doc) {
         startWeek,
         endWeek,
         weekFlag,
+        weeks,
         location,
       };
       const endTime = endTimes.get(endSection);
       if (endTime) slot.endTime = endTime;
-      if (weekFlag === '单周') slot.oddWeeksOnly = true;
-      if (weekFlag === '双周') slot.evenWeeksOnly = true;
+      if (oddWeeksOnly) slot.oddWeeksOnly = true;
+      if (evenWeeksOnly) slot.evenWeeksOnly = true;
 
       if (!courseMap.has(name)) courseMap.set(name, []);
       const slots = courseMap.get(name);
       const adjacent = slots.find(existing =>
         existing.weekday === slot.weekday &&
-        existing.startWeek === slot.startWeek &&
-        existing.endWeek === slot.endWeek &&
-        existing.weekFlag === slot.weekFlag &&
+        Array.isArray(existing.weeks) &&
+        existing.weeks.join(',') === weekKey &&
         existing.location === slot.location &&
         slot.startSection <= existing.endSection + 1 &&
         slot.endSection >= existing.startSection - 1
@@ -288,6 +329,7 @@ if (typeof globalThis !== 'undefined') {
     parseUndergraduateScheduleCell,
     parseUndergraduateScheduleFromDOM,
     parseGraduateScheduleFromDOM,
+    parseGraduateWeeks,
     normalizeGraduateSemester,
   };
 }
